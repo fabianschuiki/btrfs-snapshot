@@ -1,0 +1,13 @@
+mount_point = "/btrfs"
+format = "%Y_%m_%d_%H%M%z"
+
+[spacings]
+"3 hour" = "1 hour"  # keep hourly snapshots after 3 hours
+"1 day" = "1 day"  # keep daily snapshots after the first day
+"1 week" = "1 week"  # keep weekly snapshots after the first week
+"1 month" = "1 month"  # keep monthly snapshots after a month
+"3 months" = "3 months" # keep quarterly snapshots after 3 months
+
+[snapshots.root]
+subvolume = "/btrfs/root"
+snapshot_dir = "/btrfs/snapshots/root"

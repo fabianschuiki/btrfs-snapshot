@@ -1,0 +1,19 @@
+[package]
+name = "btrfs-snapshot"
+version = "0.1.0"
+authors = ["Fabian Schuiki <fabian@schuiki.ch>"]
+edition = "2018"
+description = "A tool to create rotating btrfs subvolume snapshots."
+
+[dependencies]
+anyhow = "1"
+chrono = "0.4"
+clap = "2.27"
+indexmap = { version = "1.6", features = ["serde"] }
+log = "0.4"
+humantime = "2.1"
+humantime-serde = "1.0.1"
+pretty_env_logger = "0.4"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.5"
