@@ -7,7 +7,7 @@ extern crate clap;
 extern crate log;
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::DateTime;
+use chrono::{DateTime, Timelike as _};
 use clap::Arg;
 use humantime::format_duration;
 use indexmap::{IndexMap, IndexSet};
@@ -241,15 +241,15 @@ impl<'a> State<'a> {
         // are too close to the previous entry.
         let mut it = entries.iter();
         let mut newest = match it.next() {
-            Some(&(d, _)) => d,
+            Some(x) => x,
             None => return Ok(()),
         };
-        let now = newest;
-        trace!("Snapshot {}", newest);
-        for &(date, ref file) in it {
-            let age = now.signed_duration_since(date).to_std()?;
-            let spacing = newest.signed_duration_since(date).to_std()?;
-            trace!("Snapshot {} spaced {}", date, format_duration(spacing));
+        let now = chrono::Local::now().with_nanosecond(0).unwrap();
+        trace!("Snapshot {}", newest.0);
+        for current in it {
+            let age = now.signed_duration_since(newest.0).to_std()?;
+            let spacing = (newest.0).signed_duration_since(current.0).to_std()?;
+            trace!("Snapshot {} spaced {}", current.0, format_duration(spacing));
 
             // Lookup the intended spacing for this snapshot age.
             let intended_spacing = snapshot
@@ -258,19 +258,18 @@ impl<'a> State<'a> {
                 .unwrap()
                 .iter()
                 .map(|(a, s)| (a.into_inner(), s.into_inner()))
-                .filter(|&(a, _)| a < age)
+                .filter(|&(a, _)| a <= age)
                 .max_by_key(|&(a, _)| a)
                 .map(|(_, s)| s);
 
             // Drop the snapshot if not adequately spaced.
             if intended_spacing.is_some() && Some(spacing) < intended_spacing {
+                let file = &current.1;
                 println!("Dropping snapshot {}", file.display());
-                debug!("  Age: {}", format_duration(age));
-                debug!("  Spacing: {}", format_duration(spacing));
-                debug!(
-                    "  Intended Spacing: {}",
-                    format_duration(intended_spacing.unwrap())
-                );
+                debug!("Dropping {}", current.0);
+                debug!("  Favoring: {} (age {})", newest.0, format_duration(age));
+                debug!("  Spacing:  {}", format_duration(spacing));
+                debug!("  Intended: {}", format_duration(intended_spacing.unwrap()));
                 self.maybe_run(
                     Command::new("btrfs")
                         .arg("subvolume")
@@ -278,9 +277,9 @@ impl<'a> State<'a> {
                         .arg(file),
                 )
                 .with_context(|| format!("Deleting snapshot {} failed", file.display()))?;
-                continue;
+            } else {
+                newest = current;
             }
-            newest = date;
         }
 
         Ok(())
