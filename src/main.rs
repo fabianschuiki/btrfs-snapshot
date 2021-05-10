@@ -210,7 +210,19 @@ impl<'a> State<'a> {
         debug!("Rotate snapshots for {}", snapshot.name);
         self.mount_if_needed(snapshot.mount_point.as_ref().unwrap())?;
 
+        // Create an array of snapshot spacings.
+        let mut spacings: Vec<_> = snapshot
+            .spacings
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(age, spacing)| (age.into_inner(), spacing.into_inner()))
+            .collect();
+        spacings.sort_by_key(|&(age, _)| age);
+        trace!("Spacings: {:?}", spacings);
+
         // Parse the snapshots into proper dates.
+        let now = chrono::Local::now().with_nanosecond(0).unwrap();
         let format = snapshot.format.as_ref().unwrap();
         let mut entries = Vec::new();
         for file in std::fs::read_dir(snapshot.snapshot_dir.as_ref().unwrap())? {
@@ -230,56 +242,75 @@ impl<'a> State<'a> {
                     continue;
                 }
             };
-            entries.push((date, file));
+            let age = now.signed_duration_since(date).to_std()?;
+            let rule = spacings
+                .iter()
+                .enumerate()
+                .filter(|(_, &(a, _))| a <= age)
+                .max_by_key(|(_, &(a, _))| a)
+                .map(|(i, _)| i);
+            entries.push((date, file, rule));
         }
 
         // Sort the entries by descending date.
-        entries.sort_by_key(|&(d, _)| d);
+        entries.sort_by_key(|&(d, ..)| d);
         entries.reverse();
 
         // Iterate through the entries newest to oldest and mark the ones that
         // are too close to the previous entry.
-        let mut it = entries.iter();
-        let mut newest = match it.next() {
-            Some(x) => x,
-            None => return Ok(()),
-        };
-        let now = chrono::Local::now().with_nanosecond(0).unwrap();
-        trace!("Snapshot {}", newest.0);
-        for current in it {
-            let age = now.signed_duration_since(newest.0).to_std()?;
-            let spacing = (newest.0).signed_duration_since(current.0).to_std()?;
-            trace!("Snapshot {} spaced {}", current.0, format_duration(spacing));
+        let mut delete = IndexSet::new();
+        for (rule, &(target_age, target_spacing)) in spacings.iter().enumerate() {
+            trace!(
+                "Purging for rule {}, until age {}, spacing {}",
+                rule,
+                format_duration(target_age),
+                format_duration(target_spacing)
+            );
+            let mut it = entries.iter();
+            let mut newest = match it.next() {
+                Some(x) => x,
+                None => return Ok(()),
+            };
+            trace!("  Initial {}", newest.0);
+            for current in it {
+                if current.2 > Some(rule) {
+                    break;
+                }
+                let applies = current.2 == Some(rule);
+                let spacing = (newest.0).signed_duration_since(current.0).to_std()?;
+                trace!(
+                    "  {} {}, rule {:?}, spacing {}",
+                    if applies { "Considering" } else { "Skipping" },
+                    current.0,
+                    current.2,
+                    format_duration(spacing)
+                );
 
-            // Lookup the intended spacing for this snapshot age.
-            let intended_spacing = snapshot
-                .spacings
-                .as_ref()
-                .unwrap()
-                .iter()
-                .map(|(a, s)| (a.into_inner(), s.into_inner()))
-                .filter(|&(a, _)| a <= age)
-                .max_by_key(|&(a, _)| a)
-                .map(|(_, s)| s);
-
-            // Drop the snapshot if not adequately spaced.
-            if intended_spacing.is_some() && Some(spacing) < intended_spacing {
-                let file = &current.1;
-                println!("Dropping snapshot {}", file.display());
-                debug!("Dropping {}", current.0);
-                debug!("  Favoring: {} (age {})", newest.0, format_duration(age));
-                debug!("  Spacing:  {}", format_duration(spacing));
-                debug!("  Intended: {}", format_duration(intended_spacing.unwrap()));
-                self.maybe_run(
-                    Command::new("btrfs")
-                        .arg("subvolume")
-                        .arg("delete")
-                        .arg(file),
-                )
-                .with_context(|| format!("Deleting snapshot {} failed", file.display()))?;
-            } else {
-                newest = current;
+                // Drop the snapshot if not adequately spaced.
+                if spacing < target_spacing {
+                    if current.2 == Some(rule) {
+                        delete.insert(&current.1);
+                        debug!("  Dropping {}", current.0);
+                        debug!("    Favoring: {}", newest.0);
+                        debug!("    Spacing:  {}", format_duration(spacing));
+                        debug!("    Intended: {}", format_duration(target_spacing));
+                    }
+                } else {
+                    newest = current;
+                }
             }
+        }
+
+        // Delete the marked snapshots.
+        for file in delete {
+            println!("Dropping snapshot {}", file.display());
+            self.maybe_run(
+                Command::new("btrfs")
+                    .arg("subvolume")
+                    .arg("delete")
+                    .arg(file),
+            )
+            .with_context(|| format!("Deleting snapshot {} failed", file.display()))?;
         }
 
         Ok(())
