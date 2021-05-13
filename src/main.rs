@@ -266,18 +266,21 @@ impl<'a> State<'a> {
                 format_duration(target_age),
                 format_duration(target_spacing)
             );
-            let mut it = entries.iter();
+            let mut it = entries.iter().zip(entries.iter().skip(1));
             let mut newest = match it.next() {
-                Some(x) => x,
+                Some((x, _)) => x,
                 None => return Ok(()),
             };
             trace!("  Initial {}", newest.0);
-            for current in it {
+            for (current, older) in it {
                 if current.2 > Some(rule) {
                     break;
                 }
                 let applies = current.2 == Some(rule);
-                let spacing = (newest.0).signed_duration_since(current.0).to_std()?;
+                let spacing = std::cmp::max(
+                    (newest.0).signed_duration_since(current.0).to_std()?,
+                    (current.0).signed_duration_since(older.0).to_std()?,
+                );
                 trace!(
                     "  {} {}, rule {:?}, spacing {}",
                     if applies { "Considering" } else { "Skipping" },
